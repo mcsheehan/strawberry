@@ -1,6 +1,6 @@
 import dataclasses
 from enum import EnumMeta
-from typing import Any, Callable, List, Mapping, Optional, TypeVar, Union
+from typing import Any, Callable, List, Mapping, Optional, TypeVar, Union, overload
 
 from strawberry.type import StrawberryType
 
@@ -11,6 +11,7 @@ from .exceptions import ObjectIsNotAnEnumError
 class EnumValue:
     name: str
     value: Any
+    deprecation_reason: Optional[str] = None
 
 
 @dataclasses.dataclass
@@ -34,9 +35,27 @@ class EnumDefinition(StrawberryType):
         return False
 
 
+@dataclasses.dataclass
+class EnumValueDefinition:
+    value: Any
+    deprecation_reason: Optional[str] = None
+
+
+def enum_value(
+    value: Any, deprecation_reason: Optional[str] = None
+) -> EnumValueDefinition:
+    return EnumValueDefinition(
+        value=value,
+        deprecation_reason=deprecation_reason,
+    )
+
+
+EnumType = TypeVar("EnumType", bound=EnumMeta)
+
+
 def _process_enum(
-    cls: EnumMeta, name: Optional[str] = None, description: Optional[str] = None
-) -> EnumMeta:
+    cls: EnumType, name: Optional[str] = None, description: Optional[str] = None
+) -> EnumType:
     if not isinstance(cls, EnumMeta):
         raise ObjectIsNotAnEnumError(cls)
 
@@ -45,7 +64,18 @@ def _process_enum(
 
     description = description
 
-    values = [EnumValue(item.name, item.value) for item in cls]  # type: ignore
+    values = []
+    for item in cls:  # type: ignore
+        item_value = item.value
+        item_name = item.name
+        deprecation_reason = None
+
+        if isinstance(item_value, EnumValueDefinition):
+            deprecation_reason = item_value.deprecation_reason
+            item_value = item_value.value
+
+        value = EnumValue(item_name, item_value, deprecation_reason=deprecation_reason)
+        values.append(value)
 
     cls._enum_definition = EnumDefinition(  # type: ignore
         wrapped_cls=cls,
@@ -57,16 +87,28 @@ def _process_enum(
     return cls
 
 
+@overload
+def enum(_cls: EnumType, *, name=None, description=None) -> EnumType:
+    ...
+
+
+@overload
 def enum(
-    _cls: EnumMeta = None, *, name=None, description=None
-) -> Union[EnumMeta, Callable[[EnumMeta], EnumMeta]]:
+    _cls: None = None, *, name=None, description=None
+) -> Callable[[EnumType], EnumType]:
+    ...
+
+
+def enum(
+    _cls: Optional[EnumType] = None, *, name=None, description=None
+) -> Union[EnumType, Callable[[EnumType], EnumType]]:
     """Registers the enum in the GraphQL type system.
 
     If name is passed, the name of the GraphQL type will be
     the value passed of name instead of the Enum class name.
     """
 
-    def wrap(cls: EnumMeta) -> EnumMeta:
+    def wrap(cls: EnumType) -> EnumType:
         return _process_enum(cls, name, description)
 
     if not _cls:

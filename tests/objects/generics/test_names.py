@@ -1,4 +1,5 @@
-from typing import Generic, NewType, TypeVar
+import textwrap
+from typing import Generic, List, NewType, TypeVar
 
 import pytest
 
@@ -11,6 +12,8 @@ from strawberry.union import StrawberryUnion
 
 
 T = TypeVar("T")
+K = TypeVar("K")
+V = TypeVar("V")
 
 
 Enum = EnumDefinition(None, name="Enum", values=[], description=None)  # type: ignore
@@ -52,3 +55,79 @@ def test_name_generation(types, expected_name):
     type_definition = Example._type_definition  # type: ignore
 
     assert config.name_converter.from_generic(type_definition, types) == expected_name
+
+
+def test_nested_generics():
+    config = StrawberryConfig()
+
+    @strawberry.type
+    class Edge(Generic[T]):
+        node: T
+
+    @strawberry.type
+    class Connection(Generic[T]):
+        edges: List[T]
+
+    type_definition = Connection._type_definition  # type: ignore
+
+    assert (
+        config.name_converter.from_generic(
+            type_definition,
+            [
+                Edge[int],
+            ],
+        )
+        == "IntEdgeConnection"
+    )
+
+
+def test_nested_generics_aliases_with_schema():
+    """This tests is similar to the previous test, but it also tests against
+    the schema, since the resolution of the type name might be different."""
+    config = StrawberryConfig()
+
+    @strawberry.type
+    class Value(Generic[T]):
+        value: T
+
+    @strawberry.type
+    class DictItem(Generic[K, V]):
+        key: K
+        value: V
+
+    type_definition = Value._type_definition  # type: ignore
+
+    assert (
+        config.name_converter.from_generic(
+            type_definition,
+            [
+                StrawberryList(DictItem[int, str]),
+            ],
+        )
+        == "IntStrDictItemListValue"
+    )
+
+    @strawberry.type
+    class Query:
+        d: Value[List[DictItem[int, str]]]
+
+    schema = strawberry.Schema(query=Query)
+
+    expected = textwrap.dedent(
+        """
+        type IntStrDictItem {
+          key: Int!
+          value: String!
+        }
+
+        type IntStrDictItemListValue {
+          value: [IntStrDictItem!]!
+        }
+
+        type Query {
+          d: IntStrDictItemListValue!
+        }
+        """
+    ).strip()
+
+    assert str(schema) == expected

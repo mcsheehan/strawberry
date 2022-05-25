@@ -3,6 +3,8 @@ from __future__ import annotations
 import dataclasses
 from typing import (
     TYPE_CHECKING,
+    Any,
+    Callable,
     List,
     Mapping,
     Optional,
@@ -17,6 +19,8 @@ from strawberry.utils.typing import is_generic as is_type_generic
 
 
 if TYPE_CHECKING:
+    from graphql import GraphQLResolveInfo
+
     from strawberry.field import StrawberryField
     from strawberry.schema_directive import StrawberrySchemaDirective
 
@@ -31,6 +35,7 @@ class TypeDefinition(StrawberryType):
     interfaces: List["TypeDefinition"]
     extend: bool
     directives: Optional[Sequence[StrawberrySchemaDirective]]
+    is_type_of: Optional[Callable[[Any, GraphQLResolveInfo], bool]]
 
     _fields: List["StrawberryField"]
 
@@ -85,6 +90,7 @@ class TypeDefinition(StrawberryType):
             interfaces=self.interfaces,
             description=self.description,
             extend=self.extend,
+            is_type_of=self.is_type_of,
             _fields=fields,
             concrete_of=self,
             type_var_map=type_var_map,
@@ -152,6 +158,13 @@ class TypeDefinition(StrawberryType):
 
             # Check if the expected type matches the type found on the type_map
             real_concrete_type = type(getattr(root, generic_field.name))
+
+            # TODO: uniform type var map, at the moment we map object types
+            # to their class (not to TypeDefinition) while we map enum to
+            # the EnumDefinition class. This is why we do this check here:
+            if hasattr(real_concrete_type, "_enum_definition"):
+                real_concrete_type = real_concrete_type._enum_definition
+
             if real_concrete_type is not expected_concrete_type:
                 return False
 

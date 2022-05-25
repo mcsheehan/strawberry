@@ -28,7 +28,7 @@ from strawberry.exceptions import (
     UnallowedReturnTypeForUnion,
     WrongReturnTypeForUnion,
 )
-from strawberry.type import StrawberryType
+from strawberry.type import StrawberryOptional, StrawberryType
 
 
 if TYPE_CHECKING:
@@ -62,6 +62,16 @@ class StrawberryUnion(StrawberryType):
     def __hash__(self) -> int:
         # TODO: Is this a bad idea? __eq__ objects are supposed to have the same hash
         return id(self)
+
+    def __or__(self, other: Union[StrawberryType, type]) -> StrawberryType:
+        if other is None:
+            # Return the correct notation when using `StrawberryUnion | None`.
+            return StrawberryOptional(of_type=self)
+
+        # Raise an error in any other case.
+        # There is Work in progress to deal with more merging cases, see:
+        # https://github.com/strawberry-graphql/strawberry/pull/1455
+        raise InvalidUnionType(other)
 
     @property
     def types(self) -> Tuple[StrawberryType, ...]:
@@ -126,8 +136,6 @@ class StrawberryUnion(StrawberryType):
         raise ValueError("Cannot use union type directly")
 
     def get_type_resolver(self, type_map: "TypeMap") -> GraphQLTypeResolver:
-        # TODO: Type annotate returned function
-
         def _resolve_union_type(
             root: Any, info: GraphQLResolveInfo, type_: GraphQLAbstractType
         ) -> str:
@@ -135,9 +143,16 @@ class StrawberryUnion(StrawberryType):
 
             from strawberry.types.types import TypeDefinition
 
-            # Make sure that the type that's passed in is an Object type
+            # If the type given is not an Object type, try resolving using `is_type_of`
+            # defined on the union's inner types
             if not hasattr(root, "_type_definition"):
-                # TODO: If root=python dict, this won't work
+                for inner_type in type_.types:
+                    if inner_type.is_type_of is not None and inner_type.is_type_of(
+                        root, info
+                    ):
+                        return inner_type.name
+
+                # Couldn't resolve using `is_type_of``
                 raise WrongReturnTypeForUnion(info.field_name, str(type(root)))
 
             return_type: Optional[GraphQLType]
@@ -171,9 +186,17 @@ class StrawberryUnion(StrawberryType):
         return _resolve_union_type
 
 
+Types = TypeVar("Types", bound=Type)
+
+
+# We return a Union type here in order to allow to use the union type as type
+# annotation.
+# For the `types` argument we'd ideally use a TypeVarTuple, but that's not
+# yet supported in any python implementation (or in typing_extensions).
+# See https://www.python.org/dev/peps/pep-0646/ for more information
 def union(
-    name: str, types: Tuple[Type, ...], *, description: str = None
-) -> StrawberryUnion:
+    name: str, types: Tuple[Types, ...], *, description: str = None
+) -> Union[Types]:
     """Creates a new named Union type.
 
     Example usages:
@@ -201,4 +224,4 @@ def union(
         description=description,
     )
 
-    return union_definition
+    return union_definition  # type: ignore

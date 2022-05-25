@@ -1,8 +1,17 @@
 import dataclasses
 import inspect
-from typing import Callable, List, Optional, Sequence, Type, TypeVar, cast, overload
-
-from strawberry.schema_directive import StrawberrySchemaDirective
+import types
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    List,
+    Optional,
+    Sequence,
+    Type,
+    TypeVar,
+    cast,
+    overload,
+)
 
 from .exceptions import (
     MissingFieldAnnotationError,
@@ -14,6 +23,10 @@ from .types.type_resolver import _get_fields
 from .types.types import TypeDefinition
 from .utils.str_converters import to_camel_case
 from .utils.typing import __dataclass_transform__
+
+
+if TYPE_CHECKING:
+    from strawberry.schema_directive import StrawberrySchemaDirective
 
 
 def _get_interfaces(cls: Type) -> List[TypeDefinition]:
@@ -99,13 +112,14 @@ def _process_type(
     is_input: bool = False,
     is_interface: bool = False,
     description: Optional[str] = None,
-    directives: Optional[Sequence[StrawberrySchemaDirective]] = (),
+    directives: Optional[Sequence["StrawberrySchemaDirective"]] = (),
     extend: bool = False,
 ):
     name = name or to_camel_case(cls.__name__)
 
     interfaces = _get_interfaces(cls)
     fields = _get_fields(cls)
+    is_type_of = getattr(cls, "is_type_of", None)
 
     cls._type_definition = TypeDefinition(
         name=name,
@@ -117,16 +131,29 @@ def _process_type(
         origin=cls,
         extend=extend,
         _fields=fields,
+        is_type_of=is_type_of,
     )
 
     # dataclasses removes attributes from the class here:
     # https://github.com/python/cpython/blob/577d7c4e/Lib/dataclasses.py#L873-L880
     # so we need to restore them, this will change in future, but for now this
     # solution should suffice
-
     for field_ in fields:
         if field_.base_resolver and field_.python_name:
-            setattr(cls, field_.python_name, field_.base_resolver.wrapped_func)
+            wrapped_func = field_.base_resolver.wrapped_func
+
+            # Bind the functions to the class object. This is necessary because when
+            # the @strawberry.field decorator is used on @staticmethod/@classmethods,
+            # we get the raw staticmethod/classmethod objects before class evaluation
+            # binds them to the class. We need to do this manually.
+            if isinstance(wrapped_func, staticmethod):
+                bound_method = wrapped_func.__get__(cls)
+                field_.base_resolver.wrapped_func = bound_method
+            elif isinstance(wrapped_func, classmethod):
+                bound_method = types.MethodType(wrapped_func.__func__, cls)
+                field_.base_resolver.wrapped_func = bound_method
+
+            setattr(cls, field_.python_name, wrapped_func)
 
     return cls
 
@@ -143,7 +170,7 @@ def type(
     is_input: bool = False,
     is_interface: bool = False,
     description: str = None,
-    directives: Optional[Sequence[StrawberrySchemaDirective]] = (),
+    directives: Optional[Sequence["StrawberrySchemaDirective"]] = (),
     extend: bool = False,
 ) -> T:
     ...
@@ -157,7 +184,7 @@ def type(
     is_input: bool = False,
     is_interface: bool = False,
     description: str = None,
-    directives: Optional[Sequence[StrawberrySchemaDirective]] = (),
+    directives: Optional[Sequence["StrawberrySchemaDirective"]] = (),
     extend: bool = False,
 ) -> Callable[[T], T]:
     ...
@@ -216,7 +243,7 @@ def input(
     *,
     name: str = None,
     description: str = None,
-    directives: Optional[Sequence[StrawberrySchemaDirective]] = (),
+    directives: Optional[Sequence["StrawberrySchemaDirective"]] = (),
 ) -> T:
     ...
 
@@ -227,7 +254,7 @@ def input(
     *,
     name: str = None,
     description: str = None,
-    directives: Optional[Sequence[StrawberrySchemaDirective]] = (),
+    directives: Optional[Sequence["StrawberrySchemaDirective"]] = (),
 ) -> Callable[[T], T]:
     ...
 
@@ -257,7 +284,7 @@ def interface(
     *,
     name: str = None,
     description: str = None,
-    directives: Optional[Sequence[StrawberrySchemaDirective]] = (),
+    directives: Optional[Sequence["StrawberrySchemaDirective"]] = (),
 ):
     """Annotates a class as a GraphQL Interface.
     Example usage:
